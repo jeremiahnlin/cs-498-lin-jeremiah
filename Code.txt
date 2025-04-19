@@ -1,0 +1,50 @@
+# load data
+
+import csv
+from google.cloud import bigtable
+from google.cloud.bigtable import column_family
+
+csv_file = 'data.csv'
+client = bigtable.Client(project='homework2-cs498', admin=True)
+instance = client.instance('ev-bigtable')
+table = instance.table('ev-population')
+if not table.exists():
+    table.create(column_families={'ev_info': column_family.MaxAgeGCRule(days=30)})
+def utf_fix(value):
+    if value is None:
+        return ""
+    return str(value).encode('utf-8')
+try:
+    with open(csv_file, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)    
+        rows = []
+        good_cnt = 0
+        bad_cnt = 0
+        for row in reader:
+            try:
+                row_key = utf_fix(row['DOL Vehicle ID'])
+                direct_row = table.direct_row(row_key)
+                direct_row.set_cell('ev_info', b'make', utf_fix(row['Make']))
+                direct_row.set_cell('ev_info', b'model', utf_fix(row['Model']))
+                direct_row.set_cell('ev_info', b'model_year', utf_fix(row['Model Year']))
+                direct_row.set_cell('ev_info', b'electric_range', utf_fix(row['Electric Range']))
+                direct_row.set_cell('ev_info', b'city', utf_fix(row['City']))
+                direct_row.set_cell('ev_info', b'county', utf_fix(row['County']))
+                rows.append(direct_row)
+                good_cnt += 1
+                if len(rows) >= 1000:
+                    table.mutate_rows(rows)
+                    rows = []
+                    print(f"passed thru {good_cnt} rows...")
+            except Exception as e:
+                bad_cnt += 1
+                print(f"row {good_cnt + bad_cnt} broke: {str(e)}") #Tell me where
+                continue
+        if rows:
+            table.mutate_rows(rows)
+        
+        print(f"\ndonzeo")
+        print(f"Successfully processed: {good_cnt} rows")
+        print(f"Rows skipped: {bad_cnt}")
+except Exception as e:
+    print(f"bad stuff: {str(e)}")
