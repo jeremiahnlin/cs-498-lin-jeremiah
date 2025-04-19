@@ -52,3 +52,77 @@ except Exception as e:
 
 #flask
 
+from flask import Flask
+from google.cloud import bigtable
+from google.cloud.bigtable import row_filters
+
+app = Flask(__name__)
+client = bigtable.Client(project='homework2-cs498')
+instance = client.instance('ev-bigtable')
+table = instance.table('ev-population')
+
+@app.route('/rows')
+def rows():
+    count = 0
+    for i in table.read_rows():
+        count +=1
+    return str(count)
+
+@app.route('/Best-BMW')
+def bmw():
+    count = 0
+    for row in table.read_rows():
+        make = row.cells['ev_info'].get(b'make')[0].value.decode()
+        range_val = row.cells['ev_info'].get(b'electric_range')[0].value.decode()
+        if make == 'BMW' and int(range_val) > 100:
+            count += 1
+    return str(count)
+
+@app.route('/tesla-owners')
+def tesla():
+    count = 0
+    for row in table.read_rows():
+        try:
+            make_cells = row.cells['ev_info'].get(b'make')
+            city_cells = row.cells['ev_info'].get(b'city')
+            
+            if make_cells and city_cells:
+                make = make_cells[0].value.decode('utf-8')
+                city = city_cells[0].value.decode('utf-8')
+                if str(make.lower()) == 'tesla' and str(city.lower()) == 'seattle':
+                    count += 1
+        except Exception as e:
+            print("bad")
+            continue
+    return str(count)
+
+@app.route('/update', methods=['POST', 'GET'])
+def update_range():
+    row_key = '257246118'.encode()
+    row = table.direct_row(row_key)
+    row.set_cell('ev_info', b'electric range', b'200')
+    row.commit()
+    return str("Success")
+
+@app.route('/delete', methods=['DELETE', 'GET'])
+def delete():
+    count = 0
+    for i in table.read_rows():
+        count +=1
+    del_cnt = 0
+    del_rows = []
+    for row in table.read_rows():
+        try:
+            yr = row.cells['ev_info'].get(b'model year')
+            if yr:
+                yr_str = yr[0].value.decode('utf-8')
+                if yr_str.isdigit() and int(yr_str) < 2014:
+                    del_rows.append(row.row_key)
+                    del_cnt +=1
+        except Exception as e:
+            print("bad")
+            continue
+    return str(count - del_cnt)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=80)
