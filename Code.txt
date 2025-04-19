@@ -48,3 +48,7 @@ try:
         print(f"Rows skipped: {bad_cnt}")
 except Exception as e:
     print(f"bad stuff: {str(e)}")
+
+
+#flask
+
