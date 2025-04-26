@@ -1,0 +1,134 @@
+
+#APP
+from flask import Flask, request, jsonify, Response
+import json
+import os
+from pyspark.sql import SparkSession
+from collections import OrderedDict
+
+app = Flask(__name__)
+spark = SparkSession.builder.appName("flaskapp").getOrCreate()
+df = spark.read.json("project/processed_data")
+df.cache()
+
+def url_ending(url):
+    if url.endswith(".org"):
+        return 0
+    elif url.endswith(".edu"):
+        return 1
+    elif url.endswith(".com"):
+        return 2
+    else:
+        return 3
+
+data = []
+for filename in os.listdir("project/processed_data"):
+    if filename.endswith(".json"):
+        with open(os.path.join("project/processed_data", filename)) as f:
+            for line in f:
+                data.append(json.loads(line))
+
+@app.route('/results', methods=['POST'])
+def get_results():
+    term = request.get_json().get("term", "").strip().strip('"').strip("‘’“”")
+    filtered = []
+    for d in data:
+        if d["term"] == term:
+            filtered.append(d)
+    sorted_ans = sorted(filtered, key=lambda r: (-r["clicks"], url_ending(r["url"]), r["url"]))
+    ordered = OrderedDict((entry["url"], entry["clicks"]) for entry in sorted_ans)
+    return Response(json.dumps({"results": ordered}),content_type='application/json')
+
+
+
+@app.route('/trends', methods=['POST'])
+def get_trends():
+    clcks = df.filter(df.term == request.json['term']).groupBy().sum("clicks").collect()[0][0]
+    i = clcks if clcks else 0
+    return jsonify({"clicks": i})
+
+@app.route('/popularity', methods=['POST'])
+def get_popularity():
+    url = request.json['url']
+    clcks = df.filter(df.url == url).groupBy().sum("clicks").collect()[0][0]
+    i = clcks if clcks else 0
+    return jsonify({"clicks": i})
+
+@app.route('/getBestTerms', methods=['POST'])
+def get_best_terms():
+    url_df = df.filter(df.url == request.json['website'])
+    clcks = url_df.groupBy().sum("clicks").collect()[0][0]
+    if clcks == 0:
+        return jsonify({"best_terms": []})
+    grouped = url_df.groupBy("term").sum("clicks").collect()
+    best_terms = []
+    for row in grouped:
+        if row["sum(clicks)"] > 0.05 * clcks:
+            best_terms.append(row["term"])
+    best_terms_sorted = sorted(best_terms)
+    return jsonify({"best_terms": best_terms_sorted})
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 80))
+    app.run(host='0.0.0.0', port=port, debug=True)
+
+#Preprocess
+
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+import re
+import os
+
+spark = SparkSession.builder.appName("preprocess").getOrCreate()
+rdd = spark.sparkContext.textFile("searchLog.csv")
+
+def clean_text(text):
+        return re.sub(r'[\"“”‘’]', '', text).strip()
+
+def parse_line(line):
+    try:
+        cleaned_line = line.strip()
+        if not cleaned_line:
+            return []
+        parts = cleaned_line.split(",")
+        if not parts:
+            return []
+        term_part = parts[0]
+        if "searchTerm:" not in term_part:
+            return []
+        term = clean_text(term_part.split("searchTerm:")[1])
+        results = []
+        for record in parts[1:]:
+            if not record.strip():
+                continue
+            for item in record.split("~"):
+                if not item.strip() or ":" not in item:
+                    continue
+                try:
+                    url, clicks = item.strip().split(":", 1)
+                    results.append((
+                        term,
+                        clean_text(url),
+                        int(clicks)
+                    ))
+                except (ValueError, IndexError):
+                    continue
+        return results
+    except Exception as e:
+        print(f"FAILED LINE: {e}")
+        return []
+
+
+schema = StructType([
+    StructField("term", StringType(), True),
+    StructField("url", StringType(), True),
+    StructField("clicks", IntegerType(), True)
+])
+
+df = spark.createDataFrame(rdd.flatMap(parse_line), schema)
+df.write.mode("overwrite").json("processed_data")
+spark.stop()
+
+
+#rando stuff
+sudo ~/myenv/bin/python3 project/app.py
